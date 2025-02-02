@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Index Data Visualization</title>
+  <!-- Bootstrap CSS for aesthetics -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+    integrity="sha384-ENjdO4Dr2bkBIFxQpeoI7H6YLOM9Lb26N6z9s0HhH+E2kYl5JejH2w5IQbK5lC4/"
+    crossorigin="anonymous"
+  />
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      background-color: #f8f9fa;
+      padding: 20px;
+    }
+    h1, h2 {
+      color: #343a40;
+    }
+    .index-section {
+      margin-bottom: 60px;
+      padding: 20px;
+      background: #ffffff;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    }
+    .chart-container, .table-container {
+      margin-top: 20px;
+    }
+    .chart-container {
+      padding: 20px;
+      background: #e9ecef;
+      border-radius: 8px;
+    }
+    .table-container {
+      padding: 20px;
+    }
+    /* Optional: message styling for errors or info */
+    #message {
+      color: red;
+      text-align: center;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="text-center mb-4">Index Data Visualization</h1>
+    <div id="content"></div>
+    <div id="message"></div>
+  </div>
+
+  <script>
+    /**
+     * Creates a section for an index:
+     * - A heading with the index name.
+     * - A Chart.js line chart for the "Average" metric over time.
+     * - A table listing all dates and available metrics.
+     */
+    function createIndexSection(indexData) {
+      const contentDiv = document.getElementById('content');
+      
+      // Create a container for this index
+      const indexContainer = document.createElement('div');
+      indexContainer.className = 'index-section';
+      
+      // Create a heading
+      const heading = document.createElement('h2');
+      heading.textContent = 'Index: ' + indexData.index_name;
+      indexContainer.appendChild(heading);
+      
+      // Create a chart container with a canvas element
+      const chartContainer = document.createElement('div');
+      chartContainer.className = 'chart-container';
+      const canvas = document.createElement('canvas');
+      // Generate a unique id for the canvas
+      const canvasId = 'chart-' + indexData.index_name.replace(/\s+/g, '-').toLowerCase();
+      canvas.id = canvasId;
+      chartContainer.appendChild(canvas);
+      indexContainer.appendChild(chartContainer);
+      
+      // Create a table container
+      const tableContainer = document.createElement('div');
+      tableContainer.className = 'table-container';
+      const table = document.createElement('table');
+      table.className = 'table table-striped';
+      
+      // Build table header
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      const dateHeader = document.createElement('th');
+      dateHeader.textContent = 'Date';
+      headerRow.appendChild(dateHeader);
+      
+      // Get metric names from the statistics object
+      const metrics = Object.keys(indexData.statistics);
+      metrics.forEach(metric => {
+        const th = document.createElement('th');
+        th.textContent = metric;
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      
+      // Build table body
+      const tbody = document.createElement('tbody');
+      const dates = indexData.dates;
+      for (let i = 0; i < dates.length; i++) {
+        const row = document.createElement('tr');
+        const dateCell = document.createElement('td');
+        dateCell.textContent = dates[i];
+        row.appendChild(dateCell);
+        metrics.forEach(metric => {
+          const cell = document.createElement('td');
+          const value = indexData.statistics[metric][i];
+          // Display the value (or 'N/A' if null/undefined)
+          cell.textContent = value !== null && value !== undefined ? value : 'N/A';
+          row.appendChild(cell);
+        });
+        tbody.appendChild(row);
+      }
+      table.appendChild(tbody);
+      tableContainer.appendChild(table);
+      indexContainer.appendChild(tableContainer);
+      
+      // Append this index section to the content
+      contentDiv.appendChild(indexContainer);
+      
+      // Create a line chart using Chart.js (plotting the "Average" metric)
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: 'Average',
+            data: indexData.statistics['Average'],
+            fill: false,
+            borderColor: 'rgba(75, 192, 192, 1)',
+            tension: 0.1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top'
+            },
+            title: {
+              display: true,
+              text: 'Average Price Over Time'
+            }
+          },
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Date'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Average Price'
+              }
+            }
+          }
+        }
+      });
+    }
+    
+    // Fetch the JSON data from the new S3 location and create sections for each index
+    const s3JsonUrl = 'https://whpresidentialactionsjsons.s3.amazonaws.com/all_index_data.json';
+    
+    fetch(s3JsonUrl)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(data => {
+        // If data is empty, show a message
+        if (Object.keys(data).length === 0) {
+          document.getElementById('message').textContent = 'No index data available.';
+          return;
+        }
+        // For each index in the JSON data, create a section.
+        Object.keys(data).forEach(indexKey => {
+          const indexData = data[indexKey];
+          createIndexSection(indexData);
+        });
+      })
+      .catch(error => {
+        console.error('Error loading JSON data:', error);
+        document.getElementById('message').textContent = 'Error loading JSON data. Check console for details.';
+      });
+  </script>
+</body>
+</html>
