@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Ensure proper scaling on mobile devices -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Combined Price Index Heatmap & Chart</title>
+
+  <!-- CSS Libraries -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css" />
+
+  <style>
+    body {
+      background-color: #f8f9fa;
+    }
+    h1 {
+      margin-bottom: 1rem;
+    }
+    /* Make the chart canvas fill its container */
+    .chart-container {
+      position: relative;
+      width: 100%;
+      height: 400px;
+    }
+    /* Optional: style the table cells for heatmap (will be set dynamically) */
+    .heat-cell {
+      color: #000;
+    }
+  </style>
+</head>
+<body class="bg-light">
+  <div class="container my-4">
+    <h1 class="text-center">Combined Price Index Heatmap & Chart</h1>
+
+    <!-- Dropdown for selecting which index to chart -->
+    <div class="mb-4">
+      <label for="chartIndexSelect" class="form-label">Select Index for Chart:</label>
+      <select id="chartIndexSelect" class="form-select">
+        <option value="">-- Select an index --</option>
+      </select>
+    </div>
+
+    <!-- Chart Section -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="card-title mb-0">Average Price Chart</h5>
+      </div>
+      <div class="card-body">
+        <div class="chart-container">
+          <canvas id="priceChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Combined Table Section -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="card-title mb-0">Combined Average Price Heatmap Table</h5>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table id="combinedTable" class="table table-bordered table-striped">
+            <thead>
+              <!-- Will be filled dynamically -->
+            </thead>
+            <tbody>
+              <!-- Will be filled dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JS Libraries -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    (function() {
+      "use strict";
+
+      // URL for the price index JSON file on S3
+      const DATA_URL = "https://whpresidentialactionsjsons.s3.us-east-1.amazonaws.com/all_index_data.json";
+
+      // These will hold the fetched JSON and the combined table data.
+      let priceIndexData = {}; // key: index name, value: { dates: [...], statistics: { Average: [...] } }
+      let combinedData = [];   // array of rows: { date: "YYYY-MM-DD", [indexName]: value, ... }
+      let allDates = [];       // union of all dates (as strings)
+      let indexNames = [];     // list of all index names
+      let dataTable;           // DataTable instance
+      let chart;               // Chart.js instance
+
+      // Utility: Parse a date string (assumed "YYYY-MM-DD") to a timestamp
+      const parseDate = dateStr => new Date(dateStr).getTime();
+      // Utility: Format a timestamp as "YYYY-MM-DD"
+      const formatDate = ts => {
+        const d = new Date(ts);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      };
+
+      // Function to build a mapping for each index: { indexName: { date -> average } }
+      const buildIndexMappings = () => {
+        const mappings = {};
+        indexNames.forEach(idxName => {
+          const idxData = priceIndexData[idxName];
+          const map = {};
+          // Assume the arrays are parallel.
+          idxData.dates.forEach((dateStr, i) => {
+            map[dateStr] = idxData.statistics["Average"][i];
+          });
+          mappings[idxName] = map;
+        });
+        return mappings;
+      };
+
+      // Build the union of all dates from all indexes (as strings) and sort them.
+      const buildUnionDates = () => {
+        const dateSet = new Set();
+        indexNames.forEach(idxName => {
+          priceIndexData[idxName].dates.forEach(dateStr => dateSet.add(dateStr));
+        });
+        const datesArray = Array.from(dateSet);
+        datesArray.sort((a, b) => parseDate(a) - parseDate(b));
+        return datesArray;
+      };
+
+      // Build combined table rows.
+      const buildCombinedData = () => {
+        const mappings = buildIndexMappings();
+        allDates = buildUnionDates();
+        const rows = allDates.map(dateStr => {
+          const row = { date: dateStr };
+          indexNames.forEach(idxName => {
+            // If the index has data for this date, set the value; otherwise, leave as null.
+            row[idxName] = mappings[idxName][dateStr] !== undefined ? mappings[idxName][dateStr] : null;
+          });
+          return row;
+        });
+        return rows;
+      };
+
+      // Create the table header HTML.
+      const buildTableHeader = () => {
+        let th = '<tr><th>Date</th>';
+        indexNames.forEach(idxName => {
+          th += `<th>${idxName}</th>`;
+        });
+        th += '</tr>';
+        $("#combinedTable thead").html(th);
+      };
+
+      // Initialize DataTable with combinedData.
+      const initDataTable = () => {
+        buildTableHeader();
+        dataTable = $("#combinedTable").DataTable({
+          data: combinedData,
+          columns: [
+            { data: "date" }
+          ].concat(indexNames.map(idxName => ({ data: idxName }))),
+          order: [[0, "asc"]],
+          responsive: true,
+          drawCallback: function(settings) {
+            applyHeatmapColors();
+          }
+        });
+      };
+
+      // Function to get a color based on the value relative to min and max.
+      // Here, we map low values to white and high values to red.
+      const getHeatmapColor = (value, min, max) => {
+        if (value === null || isNaN(value)) return "";
+        let norm = (value - min) / (max - min);
+        // Clamp norm between 0 and 1.
+        norm = Math.max(0, Math.min(norm, 1));
+        // For a simple gradient: white (rgb(255,255,255)) for low values,
+        // red (rgb(255,0,0)) for high values.
+        const r = 255;
+        const g = Math.round(255 * (1 - norm));
+        const b = Math.round(255 * (1 - norm));
+        return `rgb(${r}, ${g}, ${b})`;
+      };
+
+      // Apply heatmap coloring to each column (except the first, which is Date).
+      const applyHeatmapColors = () => {
+        // For each index column (starting from column 1)
+        for (let colIdx = 1; colIdx < dataTable.columns().count(); colIdx++) {
+          const colData = dataTable.column(colIdx).data().toArray()
+            .filter(val => val !== null && !isNaN(val));
+          if (colData.length === 0) continue;
+          const minVal = Math.min(...colData);
+          const maxVal = Math.max(...colData);
+          // Loop over each cell in this column.
+          dataTable.column(colIdx).nodes().each(function(cell, i) {
+            const val = dataTable.cell(cell).data();
+            if (val !== null && !isNaN(val)) {
+              $(cell).addClass("heat-cell");
+              $(cell).css("background-color", getHeatmapColor(val, minVal, maxVal));
+            } else {
+              $(cell).css("background-color", "");
+            }
+          });
+        }
+      };
+
+      // Initialize the Chart.js line chart for a selected index.
+      const initChart = (indexName) => {
+        const ctx = document.getElementById("priceChart").getContext("2d");
+        // Destroy previous chart if exists.
+        if (chart) chart.destroy();
+        const idxData = priceIndexData[indexName];
+        chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: idxData.dates,
+            datasets: [{
+              label: indexName + " - Average Price",
+              data: idxData.statistics["Average"],
+              borderColor: "rgba(75, 192, 192, 1)",
+              backgroundColor: "rgba(75, 192, 192, 0.2)",
+              fill: true,
+              tension: 0.1
+            }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: { title: { display: true, text: "Date" } },
+              y: { title: { display: true, text: "Average Price" } }
+            }
+          }
+        });
+      };
+
+      // Populate the chart dropdown with index names.
+      const populateChartDropdown = () => {
+        let html = '<option value="">-- Select an index for chart --</option>';
+        indexNames.forEach(idxName => {
+          html += `<option value="${idxName}">${idxName}</option>`;
+        });
+        $("#chartIndexSelect").html(html);
+      };
+
+      // Main initialization function.
+      const init = async () => {
+        try {
+          const response = await fetch(DATA_URL);
+          priceIndexData = await response.json();
+          // Get all index names (keys of the JSON)
+          indexNames = Object.keys(priceIndexData);
+          // Populate the chart dropdown.
+          populateChartDropdown();
+          // Build combined table data.
+          combinedData = buildCombinedData();
+          // Initialize the DataTable.
+          initDataTable();
+          // Optionally, auto-select the first index for the chart.
+          if (indexNames.length > 0) {
+            $("#chartIndexSelect").val(indexNames[0]);
+            initChart(indexNames[0]);
+          }
+        } catch (error) {
+          console.error("Error fetching or processing JSON data:", error);
+        }
+      };
+
+      // Event listener for chart dropdown change.
+      $("#chartIndexSelect").on("change", function() {
+        const idxName = $(this).val();
+        if (idxName) {
+          initChart(idxName);
+        }
+      });
+
+      $(document).ready(init);
+    })();
+  </script>
+</body>
+</html>
